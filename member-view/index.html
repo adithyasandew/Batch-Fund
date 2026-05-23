@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Batch Fund Member View</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <style>
+      body {
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background: linear-gradient(160deg, #f8fafc 0%, #eef2f7 45%, #e8eef8 100%);
+      }
+      .fade-in {
+        animation: fadeIn 0.45s ease-out;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body class="min-h-screen text-slate-900">
+    <header class="bg-slate-900 text-slate-100 px-6 py-4 shadow-md">
+      <div class="max-w-6xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h1 class="text-xl font-semibold">Batch Fund</h1>
+          <p class="text-xs text-slate-300">Member View</p>
+        </div>
+        <nav class="flex flex-wrap gap-2 text-sm">
+          <button data-section="dashboard" class="nav-item px-3 py-1 rounded-lg bg-slate-700">Dashboard</button>
+          <button data-section="collections" class="nav-item px-3 py-1 rounded-lg hover:bg-slate-700">Collections</button>
+          <button data-section="expenses" class="nav-item px-3 py-1 rounded-lg hover:bg-slate-700">Expenses</button>
+          <button data-section="members" class="nav-item px-3 py-1 rounded-lg hover:bg-slate-700">Members</button>
+          <button data-section="announcements" class="nav-item px-3 py-1 rounded-lg hover:bg-slate-700">Announcements</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-6 py-8">
+      <section id="dashboard" class="section fade-in"></section>
+      <section id="collections" class="section hidden fade-in"></section>
+      <section id="expenses" class="section hidden fade-in"></section>
+      <section id="members" class="section hidden fade-in"></section>
+      <section id="announcements" class="section hidden fade-in"></section>
+    </main>
+
+    <div id="billModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-6">
+      <div class="bg-white rounded-2xl p-4 max-w-2xl w-full">
+        <div class="flex justify-between items-center mb-2">
+          <h3 class="font-semibold">Bill Photo</h3>
+          <button id="closeModal" class="text-slate-600">Close</button>
+        </div>
+        <img id="billImage" alt="Bill" class="w-full rounded-lg" />
+      </div>
+    </div>
+
+    <script>
+      // Configure your GitHub raw URL here
+      const DATA_URL = "https://raw.githubusercontent.com/OWNER/REPO/main/data.json";
+
+      const state = {
+        meta: { batchName: "Batch Fund", currency: "USD" },
+        members: [],
+        collections: [],
+        payments: [],
+        events: [],
+        expenses: [],
+        announcements: [],
+      };
+
+      const formatCurrency = (amount) =>
+        new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: state.meta.currency || "USD",
+          maximumFractionDigits: 2,
+        }).format(amount || 0);
+
+      const computeTotals = () => {
+        const paymentsTotal = state.payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+        const expensesTotal = state.expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+        return {
+          paymentsTotal,
+          expensesTotal,
+          balance: paymentsTotal - expensesTotal,
+        };
+      };
+
+      const getMemberName = (idValue) => state.members.find((m) => m.id === idValue)?.name || "Unknown";
+      const getEventName = (idValue) => state.events.find((e) => e.id === idValue)?.name || "General";
+      const getCollectionLabel = (idValue) => state.collections.find((c) => c.id === idValue)?.label || "Collection";
+
+      const renderDashboard = () => {
+        const container = document.querySelector("#dashboard");
+        container.innerHTML = "";
+        const totals = computeTotals();
+        const latestAnnouncement = state.announcements[0];
+
+        container.innerHTML = `
+          <div class="mb-6">
+            <h2 class="text-2xl font-semibold">${state.meta.batchName}</h2>
+            <p class="text-sm text-slate-600">Shared summary for all members.</p>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div class="bg-white rounded-2xl shadow p-5">
+              <p class="text-xs uppercase text-slate-500">Fund Total</p>
+              <p class="text-2xl font-semibold">${formatCurrency(totals.paymentsTotal)}</p>
+            </div>
+            <div class="bg-white rounded-2xl shadow p-5">
+              <p class="text-xs uppercase text-slate-500">Total Expenses</p>
+              <p class="text-2xl font-semibold">${formatCurrency(totals.expensesTotal)}</p>
+            </div>
+            <div class="bg-white rounded-2xl shadow p-5">
+              <p class="text-xs uppercase text-slate-500">Balance</p>
+              <p class="text-2xl font-semibold">${formatCurrency(totals.balance)}</p>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="bg-white rounded-2xl shadow p-5">
+              <h3 class="font-semibold mb-3">Collections Progress</h3>
+              <canvas id="collectionProgress" height="140"></canvas>
+            </div>
+            <div class="bg-white rounded-2xl shadow p-5">
+              <h3 class="font-semibold mb-3">Latest Announcement</h3>
+              <p class="text-sm text-slate-600">${latestAnnouncement ? latestAnnouncement.message : "No announcements yet."}</p>
+            </div>
+          </div>
+        `;
+
+        const collectionLabels = state.collections.map((c) => c.label);
+        const collectionTotals = state.collections.map((collection) => {
+          const collectionPayments = state.payments.filter((p) => p.collectionId === collection.id);
+          const totalExpected = (collection.amount || 0) * state.members.filter((m) => m.active !== false).length;
+          const paid = collectionPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+          return totalExpected ? Math.round((paid / totalExpected) * 100) : 0;
+        });
+
+        const ctx = document.getElementById("collectionProgress");
+        if (ctx) {
+          new Chart(ctx, {
+            type: "bar",
+            data: {
+              labels: collectionLabels,
+              datasets: [
+                {
+                  label: "% Collected",
+                  data: collectionTotals,
+                  backgroundColor: "#1d4ed8",
+                },
+              ],
+            },
+            options: { scales: { y: { beginAtZero: true, max: 100 } } },
+          });
+        }
+      };
+
+      const renderCollections = () => {
+        const container = document.querySelector("#collections");
+        container.innerHTML = `
+          <div class="mb-6">
+            <h2 class="text-2xl font-semibold">Collections</h2>
+            <p class="text-sm text-slate-600">View payment status by period.</p>
+          </div>
+          <div class="bg-white rounded-2xl shadow p-5 mb-6 flex flex-col md:flex-row gap-4">
+            <input id="collectionSearch" class="border rounded-lg px-3 py-2 flex-1" placeholder="Search member name" />
+            <select id="statusFilter" class="border rounded-lg px-3 py-2">
+              <option value="">All</option>
+              <option value="Paid">Paid</option>
+              <option value="Pending">Pending</option>
+              <option value="Partial">Partial</option>
+              <option value="Excused">Excused</option>
+            </select>
+          </div>
+          <div id="collectionList" class="space-y-4"></div>
+        `;
+
+        const list = container.querySelector("#collectionList");
+        const searchInput = container.querySelector("#collectionSearch");
+        const filterSelect = container.querySelector("#statusFilter");
+
+        const renderList = () => {
+          const query = searchInput.value.toLowerCase();
+          const statusFilter = filterSelect.value;
+          list.innerHTML = state.collections
+            .map((collection) => {
+              const rows = state.members
+                .filter((member) => member.name.toLowerCase().includes(query))
+                .map((member) => {
+                  const payment = state.payments.find(
+                    (p) => p.collectionId === collection.id && p.memberId === member.id
+                  );
+                  const status = payment?.status || "Pending";
+                  if (statusFilter && status !== statusFilter) return "";
+                  return `
+                    <tr class="border-t">
+                      <td class="py-2">${member.name}</td>
+                      <td class="py-2">${status}</td>
+                      <td class="py-2">${formatCurrency(payment?.amount || 0)}</td>
+                    </tr>
+                  `;
+                })
+                .join("");
+              return `
+                <details class="bg-white rounded-2xl shadow">
+                  <summary class="cursor-pointer px-5 py-4 font-semibold">${collection.label}</summary>
+                  <div class="px-5 pb-5">
+                    <p class="text-xs text-slate-500 mb-3">Deadline: ${collection.deadline} • Amount: ${formatCurrency(collection.amount)}</p>
+                    <table class="w-full text-sm">
+                      <thead>
+                        <tr class="text-left text-slate-500">
+                          <th class="py-2">Member</th>
+                          <th class="py-2">Status</th>
+                          <th class="py-2">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>${rows}</tbody>
+                    </table>
+                  </div>
+                </details>
+              `;
+            })
+            .join("");
+        };
+
+        searchInput.oninput = renderList;
+        filterSelect.onchange = renderList;
+        renderList();
+      };
+
+      const renderExpenses = () => {
+        const container = document.querySelector("#expenses");
+        container.innerHTML = `
+          <div class="mb-6">
+            <h2 class="text-2xl font-semibold">Expenses</h2>
+            <p class="text-sm text-slate-600">Grouped by event with bill photos.</p>
+          </div>
+          <div id="expenseGroups" class="space-y-4"></div>
+        `;
+
+        const groups = container.querySelector("#expenseGroups");
+        groups.innerHTML = state.events
+          .map((event) => {
+            const expenses = state.expenses.filter((expense) => expense.eventId === event.id);
+            if (!expenses.length) return "";
+            return `
+              <div class="bg-white rounded-2xl shadow p-5">
+                <h3 class="font-semibold mb-3">${event.name}</h3>
+                <div class="space-y-3">
+                  ${expenses
+                    .map(
+                      (expense) => `
+                        <div class="border rounded-lg p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                          <div>
+                            <p class="font-semibold">${expense.title}</p>
+                            <p class="text-xs text-slate-500">${expense.date} • ${formatCurrency(expense.amount)}</p>
+                          </div>
+                          <button data-bill="${expense.billPhoto}" class="bg-slate-900 text-white rounded-lg px-4 py-2 text-sm">View Bill</button>
+                        </div>
+                      `
+                    )
+                    .join("")}
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+
+        container.querySelectorAll("[data-bill]").forEach((btn) => {
+          btn.onclick = () => openBill(btn.dataset.bill);
+        });
+      };
+
+      const renderMembers = () => {
+        const container = document.querySelector("#members");
+        container.innerHTML = `
+          <div class="mb-6">
+            <h2 class="text-2xl font-semibold">Members</h2>
+            <p class="text-sm text-slate-600">Search members and view payment history.</p>
+          </div>
+          <div class="bg-white rounded-2xl shadow p-5 mb-6">
+            <input id="memberSearch" class="border rounded-lg px-3 py-2 w-full" placeholder="Search member" />
+          </div>
+          <div id="memberList" class="space-y-4"></div>
+        `;
+
+        const list = container.querySelector("#memberList");
+        const searchInput = container.querySelector("#memberSearch");
+
+        const renderList = () => {
+          const query = searchInput.value.toLowerCase();
+          list.innerHTML = state.members
+            .filter((member) => member.name.toLowerCase().includes(query))
+            .map((member) => {
+              const payments = state.payments.filter((p) => p.memberId === member.id);
+              return `
+                <div class="bg-white rounded-2xl shadow p-5">
+                  <div class="flex items-center justify-between">
+                    <h3 class="font-semibold">${member.name}</h3>
+                    <span class="text-xs text-slate-500">${member.contact || ""}</span>
+                  </div>
+                  <div class="mt-3">
+                    <table class="w-full text-sm">
+                      <thead>
+                        <tr class="text-left text-slate-500">
+                          <th class="py-2">Collection</th>
+                          <th class="py-2">Status</th>
+                          <th class="py-2">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${payments
+                          .map(
+                            (payment) => `
+                              <tr class="border-t">
+                                <td class="py-2">${getCollectionLabel(payment.collectionId)}</td>
+                                <td class="py-2">${payment.status}</td>
+                                <td class="py-2">${formatCurrency(payment.amount)}</td>
+                              </tr>
+                            `
+                          )
+                          .join("")}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+        };
+
+        searchInput.oninput = renderList;
+        renderList();
+      };
+
+      const renderAnnouncements = () => {
+        const container = document.querySelector("#announcements");
+        container.innerHTML = `
+          <div class="mb-6">
+            <h2 class="text-2xl font-semibold">Announcements</h2>
+            <p class="text-sm text-slate-600">Latest updates from the treasurer.</p>
+          </div>
+          <div class="space-y-3">
+            ${state.announcements
+              .map(
+                (announcement) => `
+                  <div class="bg-white rounded-2xl shadow p-5">
+                    <div class="flex items-center justify-between mb-2">
+                      <h3 class="font-semibold">${announcement.title}</h3>
+                      <span class="text-xs text-slate-500">${announcement.date}</span>
+                    </div>
+                    <p class="text-sm text-slate-600">${announcement.message}</p>
+                  </div>
+                `
+              )
+              .join("")}
+          </div>
+        `;
+      };
+
+      const openBill = (base64) => {
+        if (!base64) return;
+        document.getElementById("billImage").src = base64;
+        document.getElementById("billModal").classList.remove("hidden");
+        document.getElementById("billModal").classList.add("flex");
+      };
+
+      document.getElementById("closeModal").onclick = () => {
+        document.getElementById("billModal").classList.add("hidden");
+        document.getElementById("billModal").classList.remove("flex");
+      };
+
+      const renderAll = () => {
+        renderDashboard();
+        renderCollections();
+        renderExpenses();
+        renderMembers();
+        renderAnnouncements();
+      };
+
+      const initNavigation = () => {
+        document.querySelectorAll(".nav-item").forEach((btn) => {
+          btn.onclick = () => {
+            const target = btn.dataset.section;
+            document.querySelectorAll(".section").forEach((section) => {
+              section.classList.toggle("hidden", section.id !== target);
+            });
+            document.querySelectorAll(".nav-item").forEach((nav) => nav.classList.remove("bg-slate-700"));
+            btn.classList.add("bg-slate-700");
+          };
+        });
+      };
+
+      const init = async () => {
+        try {
+          const response = await fetch(DATA_URL);
+          if (!response.ok) throw new Error("Failed to load data.json");
+          const data = await response.json();
+          Object.assign(state, data);
+        } catch (error) {
+          console.error(error);
+        }
+        renderAll();
+        initNavigation();
+      };
+
+      init();
+    </script>
+  </body>
+</html>

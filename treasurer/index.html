@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Batch Fund Treasurer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top, #f8fafc 0%, #eef2f7 35%, #e5ebf5 100%);
+      }
+      .glass {
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(8px);
+      }
+      .fade-in {
+        animation: fadeIn 0.5s ease-out;
+      }
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body class="min-h-screen text-slate-900">
+    <div class="flex min-h-screen">
+      <aside class="w-64 bg-slate-900 text-slate-100 px-5 py-6 flex flex-col gap-6">
+        <div>
+          <h1 class="text-xl font-semibold tracking-wide">Batch Fund</h1>
+          <p class="text-xs text-slate-300">Treasurer Console</p>
+        </div>
+        <nav class="flex-1 space-y-2 text-sm">
+          <button data-section="dashboard" class="nav-item w-full text-left px-3 py-2 rounded-lg bg-slate-800">Dashboard</button>
+          <button data-section="members" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Members</button>
+          <button data-section="collections" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Collections</button>
+          <button data-section="payments" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Payments</button>
+          <button data-section="expenses" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Expenses</button>
+          <button data-section="events" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Events</button>
+          <button data-section="reports" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Reports</button>
+          <button data-section="announcements" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Announcements</button>
+          <button data-section="settings" class="nav-item w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800">Settings</button>
+        </nav>
+        <div class="text-xs text-slate-400">Local data only • Export to GitHub</div>
+      </aside>
+      <main class="flex-1 p-6 lg:p-10">
+        <section id="dashboard" class="section fade-in"></section>
+        <section id="members" class="section hidden fade-in"></section>
+        <section id="collections" class="section hidden fade-in"></section>
+        <section id="payments" class="section hidden fade-in"></section>
+        <section id="expenses" class="section hidden fade-in"></section>
+        <section id="events" class="section hidden fade-in"></section>
+        <section id="reports" class="section hidden fade-in"></section>
+        <section id="announcements" class="section hidden fade-in"></section>
+        <section id="settings" class="section hidden fade-in"></section>
+      </main>
+    </div>
+
+    <template id="cardTemplate">
+      <div class="glass rounded-2xl shadow-md p-5"></div>
+    </template>
+
+    <script>
+      const STORAGE_KEYS = {
+        meta: "bf_meta",
+        members: "bf_members",
+        collections: "bf_collections",
+        payments: "bf_payments",
+        events: "bf_events",
+        expenses: "bf_expenses",
+        announcements: "bf_announcements",
+      };
+
+      const defaultMeta = {
+        batchName: "Batch Fund",
+        currency: "LKR",
+      };
+
+      const state = {
+        meta: defaultMeta,
+        members: [],
+        collections: [],
+        payments: [],
+        events: [],
+        expenses: [],
+        announcements: [],
+      };
+
+      const id = () => crypto.randomUUID();
+
+      const db = {
+        instance: null,
+        async init() {
+          return new Promise((resolve, reject) => {
+            const request = indexedDB.open("BatchFundDB", 1);
+            request.onupgradeneeded = () => {
+              const dbInstance = request.result;
+              if (!dbInstance.objectStoreNames.contains("billPhotos")) {
+                dbInstance.createObjectStore("billPhotos");
+              }
+            };
+            request.onsuccess = () => {
+              db.instance = request.result;
+              resolve();
+            };
+            request.onerror = () => reject(request.error);
+          });
+        },
+        async setBillPhoto(key, value) {
+          return new Promise((resolve, reject) => {
+            const tx = db.instance.transaction("billPhotos", "readwrite");
+            tx.objectStore("billPhotos").put(value, key);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          });
+        },
+        async getBillPhoto(key) {
+          return new Promise((resolve, reject) => {
+            const tx = db.instance.transaction("billPhotos", "readonly");
+            const request = tx.objectStore("billPhotos").get(key);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+        },
+      };
+
+      const saveState = () => {
+        Object.entries(STORAGE_KEYS).forEach(([key, storageKey]) => {
+          localStorage.setItem(storageKey, JSON.stringify(state[key]));
+        });
+      };
+
+      const loadState = () => {
+        Object.entries(STORAGE_KEYS).forEach(([key, storageKey]) => {
+          const raw = localStorage.getItem(storageKey);
+          if (raw) {
+            state[key] = JSON.parse(raw);
+          }
+        });
+      };
+
+      const formatCurrency = (amount) =>
+        new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: state.meta.currency || "USD",
+          maximumFractionDigits: 2,
+        }).format(amount || 0);
+
+      const computeTotals = () => {
+        const paymentsTotal = state.payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+        const expensesTotal = state.expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+        return {
+          paymentsTotal,
+          expensesTotal,
+          balance: paymentsTotal - expensesTotal,
+        };
+      };
+
+      const getMemberName = (idValue) => state.members.find((m) => m.id === idValue)?.name || "Unknown";
+      const getCollectionLabel = (idValue) => state.collections.find((c) => c.id === idValue)?.label || "Collection";
+      const getEventName = (idValue) => state.events.find((e) => e.id === idValue)?.name || "General";
+
+      const renderDashboard = () => {
+        const container = document.querySelector("#dashboard");
+        container.innerHTML = "";
+        const totals = computeTotals();
+
+        const header = document.createElement("div");
+        header.className = "flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6";
+        header.innerHTML = `
+          <div>
+            <h2 class="text-2xl font-semibold">${state.meta.batchName}</h2>
+            <p class="text-sm text-slate-600">Treasurer overview and quick insights.</p>
+          </div>
+          <div class="glass rounded-2xl px-4 py-2 text-sm text-slate-700">
+            Running Balance: <span class="font-semibold">${formatCurrency(totals.balance)}</span>
+          </div>
+        `;
+        container.appendChild(header);
+
+        const grid = document.createElement("div");
+        grid.className = "grid grid-cols-1 md:grid-cols-3 gap-4";
+        grid.innerHTML = `
+          <div class="glass rounded-2xl p-5">
+            <p class="text-xs uppercase text-slate-500">Total Payments</p>
+            <p class="text-2xl font-semibold">${formatCurrency(totals.paymentsTotal)}</p>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <p class="text-xs uppercase text-slate-500">Total Expenses</p>
+            <p class="text-2xl font-semibold">${formatCurrency(totals.expensesTotal)}</p>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <p class="text-xs uppercase text-slate-500">Active Members</p>
+            <p class="text-2xl font-semibold">${state.members.filter((m) => m.active).length}</p>
+          </div>
+        `;
+        container.appendChild(grid);
+
+        const chartRow = document.createElement("div");
+        chartRow.className = "grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6";
+        chartRow.innerHTML = `
+          <div class="glass rounded-2xl p-5">
+            <h3 class="text-sm font-semibold mb-3">Collection Completion</h3>
+            <canvas id="collectionsChart" height="140"></canvas>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <h3 class="text-sm font-semibold mb-3">Expenses by Event</h3>
+            <canvas id="expensesChart" height="140"></canvas>
+          </div>
+        `;
+        container.appendChild(chartRow);
+
+        const collectionLabels = state.collections.map((c) => c.label);
+        const collectionTotals = state.collections.map((collection) => {
+          const collectionPayments = state.payments.filter((p) => p.collectionId === collection.id);
+          const totalExpected = (collection.amount || 0) * state.members.filter((m) => m.active).length;
+          const paid = collectionPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+          return totalExpected ? Math.round((paid / totalExpected) * 100) : 0;
+        });
+
+        const eventLabels = state.events.map((event) => event.name);
+        const eventTotals = state.events.map((event) =>
+          state.expenses
+            .filter((expense) => expense.eventId === event.id)
+            .reduce((sum, expense) => sum + (expense.amount || 0), 0)
+        );
+
+        const collectionCtx = document.getElementById("collectionsChart");
+        if (collectionCtx) {
+          new Chart(collectionCtx, {
+            type: "bar",
+            data: {
+              labels: collectionLabels,
+              datasets: [
+                {
+                  label: "% Collected",
+                  data: collectionTotals,
+                  backgroundColor: "#0f766e",
+                },
+              ],
+            },
+            options: {
+              scales: {
+                y: { beginAtZero: true, max: 100 },
+              },
+            },
+          });
+        }
+
+        const expensesCtx = document.getElementById("expensesChart");
+        if (expensesCtx) {
+          new Chart(expensesCtx, {
+            type: "doughnut",
+            data: {
+              labels: eventLabels,
+              datasets: [
+                {
+                  data: eventTotals,
+                  backgroundColor: ["#0f766e", "#e11d48", "#f97316", "#3b82f6"],
+                },
+              ],
+            },
+          });
+        }
+      };
+
+      const renderMembers = () => {
+        const container = document.querySelector("#members");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Members</h2>
+              <p class="text-sm text-slate-600">Add, update, and deactivate members.</p>
+            </div>
+            <button id="addMemberBtn" class="bg-teal-600 text-white px-4 py-2 rounded-lg">Add Member</button>
+          </div>
+          <div id="memberForm" class="glass rounded-2xl p-5 mb-6 hidden"></div>
+          <div class="glass rounded-2xl p-5">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="py-2">Name</th>
+                  <th class="py-2">Contact</th>
+                  <th class="py-2">Status</th>
+                  <th class="py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="membersTable"></tbody>
+            </table>
+          </div>
+        `;
+
+        const formContainer = container.querySelector("#memberForm");
+        const addBtn = container.querySelector("#addMemberBtn");
+
+        const openForm = (member = {}) => {
+          formContainer.classList.remove("hidden");
+          formContainer.innerHTML = `
+            <form id="memberEditor" class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+              <input type="hidden" name="id" value="${member.id || ""}" />
+              <input class="border rounded-lg px-3 py-2" name="name" placeholder="Full name" value="${member.name || ""}" required />
+              <input class="border rounded-lg px-3 py-2" name="contact" placeholder="Contact" value="${member.contact || ""}" />
+              <input class="border rounded-lg px-3 py-2" name="notes" placeholder="Notes" value="${member.notes || ""}" />
+              <div class="flex gap-2">
+                <button type="submit" class="bg-slate-900 text-white px-4 py-2 rounded-lg">Save</button>
+                <button type="button" id="cancelMember" class="border px-4 py-2 rounded-lg">Cancel</button>
+              </div>
+            </form>
+          `;
+
+          formContainer.querySelector("#cancelMember").onclick = () => {
+            formContainer.classList.add("hidden");
+          };
+          formContainer.querySelector("#memberEditor").onsubmit = (event) => {
+            event.preventDefault();
+            const data = Object.fromEntries(new FormData(event.target).entries());
+            if (data.id) {
+              const existing = state.members.find((m) => m.id === data.id);
+              if (existing) {
+                existing.name = data.name;
+                existing.contact = data.contact;
+                existing.notes = data.notes;
+              }
+            } else {
+              state.members.push({
+                id: id(),
+                name: data.name,
+                contact: data.contact,
+                notes: data.notes,
+                active: true,
+              });
+            }
+            saveState();
+            renderMembers();
+          };
+        };
+
+        addBtn.onclick = () => openForm();
+
+        const table = container.querySelector("#membersTable");
+        table.innerHTML = state.members
+          .map(
+            (member) => `
+              <tr class="border-t">
+                <td class="py-2">${member.name}</td>
+                <td class="py-2">${member.contact || "-"}</td>
+                <td class="py-2">
+                  <span class="px-2 py-1 rounded-full text-xs ${member.active ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}">
+                    ${member.active ? "Active" : "Inactive"}
+                  </span>
+                </td>
+                <td class="py-2 flex gap-2">
+                  <button data-edit="${member.id}" class="text-slate-600">Edit</button>
+                  <button data-toggle="${member.id}" class="text-slate-600">${member.active ? "Deactivate" : "Activate"}</button>
+                </td>
+              </tr>
+            `
+          )
+          .join("");
+
+        table.querySelectorAll("[data-edit]").forEach((btn) => {
+          btn.onclick = () => {
+            const member = state.members.find((m) => m.id === btn.dataset.edit);
+            if (member) openForm(member);
+          };
+        });
+        table.querySelectorAll("[data-toggle]").forEach((btn) => {
+          btn.onclick = () => {
+            const member = state.members.find((m) => m.id === btn.dataset.toggle);
+            if (member) {
+              member.active = !member.active;
+              saveState();
+              renderMembers();
+            }
+          };
+        });
+      };
+
+      const renderCollections = () => {
+        const container = document.querySelector("#collections");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Collections</h2>
+              <p class="text-sm text-slate-600">Create collection periods and track expectations.</p>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <form id="collectionForm" class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+              <input class="border rounded-lg px-3 py-2" name="label" placeholder="Label" required />
+              <input class="border rounded-lg px-3 py-2" name="amount" type="number" min="0" step="0.01" placeholder="Amount per member" required />
+              <input class="border rounded-lg px-3 py-2" name="deadline" type="date" required />
+              <button class="bg-slate-900 text-white rounded-lg px-4 py-2">Add Period</button>
+            </form>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="py-2">Label</th>
+                  <th class="py-2">Amount</th>
+                  <th class="py-2">Deadline</th>
+                </tr>
+              </thead>
+              <tbody id="collectionTable"></tbody>
+            </table>
+          </div>
+        `;
+
+        const form = container.querySelector("#collectionForm");
+        form.onsubmit = (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form).entries());
+          state.collections.push({
+            id: id(),
+            label: data.label,
+            amount: Number(data.amount),
+            deadline: data.deadline,
+          });
+          saveState();
+          form.reset();
+          renderCollections();
+        };
+
+        const table = container.querySelector("#collectionTable");
+        table.innerHTML = state.collections
+          .map(
+            (collection) => `
+              <tr class="border-t">
+                <td class="py-2">${collection.label}</td>
+                <td class="py-2">${formatCurrency(collection.amount)}</td>
+                <td class="py-2">${collection.deadline}</td>
+              </tr>
+            `
+          )
+          .join("");
+      };
+
+      const renderPayments = () => {
+        const container = document.querySelector("#payments");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Payments</h2>
+              <p class="text-sm text-slate-600">Record payments per member per collection.</p>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <form id="paymentForm" class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+              <select class="border rounded-lg px-3 py-2" name="collectionId" required>
+                <option value="">Collection</option>
+                ${state.collections.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}
+              </select>
+              <select class="border rounded-lg px-3 py-2" name="memberId" required>
+                <option value="">Member</option>
+                ${state.members.map((m) => `<option value="${m.id}">${m.name}</option>`).join("")}
+              </select>
+              <select class="border rounded-lg px-3 py-2" name="status" required>
+                <option>Paid</option>
+                <option>Partial</option>
+                <option>Pending</option>
+                <option>Excused</option>
+              </select>
+              <input class="border rounded-lg px-3 py-2" name="amount" type="number" min="0" step="0.01" placeholder="Amount" required />
+              <button class="bg-slate-900 text-white rounded-lg px-4 py-2">Record</button>
+            </form>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <p class="text-sm text-slate-600">Bulk mark status for a collection.</p>
+              <div class="flex gap-2">
+                <select id="bulkCollection" class="border rounded-lg px-3 py-2">
+                  <option value="">Collection</option>
+                  ${state.collections.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}
+                </select>
+                <select id="bulkStatus" class="border rounded-lg px-3 py-2">
+                  <option>Paid</option>
+                  <option>Pending</option>
+                  <option>Excused</option>
+                </select>
+                <button id="bulkApply" class="bg-teal-600 text-white rounded-lg px-4 py-2">Apply</button>
+              </div>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="py-2">Collection</th>
+                  <th class="py-2">Member</th>
+                  <th class="py-2">Status</th>
+                  <th class="py-2">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="paymentsTable"></tbody>
+            </table>
+          </div>
+        `;
+
+        const form = container.querySelector("#paymentForm");
+        form.onsubmit = (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form).entries());
+          state.payments.push({
+            id: id(),
+            collectionId: data.collectionId,
+            memberId: data.memberId,
+            status: data.status,
+            amount: Number(data.amount),
+            date: new Date().toISOString().slice(0, 10),
+          });
+          saveState();
+          form.reset();
+          renderPayments();
+        };
+
+        container.querySelector("#bulkApply").onclick = () => {
+          const collectionId = container.querySelector("#bulkCollection").value;
+          const status = container.querySelector("#bulkStatus").value;
+          if (!collectionId) return;
+          state.members.forEach((member) => {
+            const existing = state.payments.find(
+              (payment) => payment.collectionId === collectionId && payment.memberId === member.id
+            );
+            const amount = status === "Paid"
+              ? state.collections.find((c) => c.id === collectionId)?.amount || 0
+              : 0;
+            if (existing) {
+              existing.status = status;
+              existing.amount = amount;
+            } else {
+              state.payments.push({
+                id: id(),
+                collectionId,
+                memberId: member.id,
+                status,
+                amount,
+                date: new Date().toISOString().slice(0, 10),
+              });
+            }
+          });
+          saveState();
+          renderPayments();
+        };
+
+        const table = container.querySelector("#paymentsTable");
+        table.innerHTML = state.payments
+          .map(
+            (payment) => `
+              <tr class="border-t">
+                <td class="py-2">${getCollectionLabel(payment.collectionId)}</td>
+                <td class="py-2">${getMemberName(payment.memberId)}</td>
+                <td class="py-2">${payment.status}</td>
+                <td class="py-2">${formatCurrency(payment.amount)}</td>
+              </tr>
+            `
+          )
+          .join("");
+      };
+
+      const renderEvents = () => {
+        const container = document.querySelector("#events");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Events</h2>
+              <p class="text-sm text-slate-600">Create named events to tag expenses.</p>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <form id="eventForm" class="flex flex-col lg:flex-row gap-4">
+              <input class="border rounded-lg px-3 py-2 flex-1" name="name" placeholder="Event name" required />
+              <button class="bg-slate-900 text-white rounded-lg px-4 py-2">Add Event</button>
+            </form>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <ul class="space-y-2" id="eventsList"></ul>
+          </div>
+        `;
+
+        const form = container.querySelector("#eventForm");
+        form.onsubmit = (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form).entries());
+          state.events.push({ id: id(), name: data.name });
+          saveState();
+          form.reset();
+          renderEvents();
+        };
+
+        const list = container.querySelector("#eventsList");
+        list.innerHTML = state.events
+          .map(
+            (event) => `
+              <li class="flex items-center justify-between border rounded-lg px-3 py-2">
+                <span>${event.name}</span>
+                <button data-remove="${event.id}" class="text-sm text-rose-500">Remove</button>
+              </li>
+            `
+          )
+          .join("");
+
+        list.querySelectorAll("[data-remove]").forEach((btn) => {
+          btn.onclick = () => {
+            state.events = state.events.filter((event) => event.id !== btn.dataset.remove);
+            saveState();
+            renderEvents();
+          };
+        });
+      };
+
+      const renderExpenses = () => {
+        const container = document.querySelector("#expenses");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Expenses</h2>
+              <p class="text-sm text-slate-600">Track outgoing payments with bill photos.</p>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <form id="expenseForm" class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+              <input class="border rounded-lg px-3 py-2" name="title" placeholder="Expense" required />
+              <select class="border rounded-lg px-3 py-2" name="eventId" required>
+                <option value="">Event</option>
+                ${state.events.map((event) => `<option value="${event.id}">${event.name}</option>`).join("")}
+              </select>
+              <input class="border rounded-lg px-3 py-2" name="amount" type="number" min="0" step="0.01" placeholder="Amount" required />
+              <input class="border rounded-lg px-3 py-2" name="date" type="date" required />
+              <input class="border rounded-lg px-3 py-2" name="bill" type="file" accept="image/*" required />
+              <button class="bg-slate-900 text-white rounded-lg px-4 py-2 lg:col-span-5">Add Expense</button>
+            </form>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-slate-500">
+                  <th class="py-2">Expense</th>
+                  <th class="py-2">Event</th>
+                  <th class="py-2">Amount</th>
+                  <th class="py-2">Date</th>
+                </tr>
+              </thead>
+              <tbody id="expensesTable"></tbody>
+            </table>
+          </div>
+        `;
+
+        const form = container.querySelector("#expenseForm");
+        form.onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form).entries());
+          const file = form.querySelector("[name='bill']").files[0];
+          let base64 = "";
+          if (file) {
+            base64 = await toBase64(file);
+          }
+          const expenseId = id();
+          await db.setBillPhoto(expenseId, base64);
+          state.expenses.push({
+            id: expenseId,
+            title: data.title,
+            eventId: data.eventId,
+            amount: Number(data.amount),
+            date: data.date,
+            billPhoto: base64,
+          });
+          saveState();
+          form.reset();
+          renderExpenses();
+        };
+
+        const table = container.querySelector("#expensesTable");
+        table.innerHTML = state.expenses
+          .map(
+            (expense) => `
+              <tr class="border-t">
+                <td class="py-2">${expense.title}</td>
+                <td class="py-2">${getEventName(expense.eventId)}</td>
+                <td class="py-2">${formatCurrency(expense.amount)}</td>
+                <td class="py-2">${expense.date}</td>
+              </tr>
+            `
+          )
+          .join("");
+      };
+
+      const renderAnnouncements = () => {
+        const container = document.querySelector("#announcements");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Announcements</h2>
+              <p class="text-sm text-slate-600">Share updates with members.</p>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <form id="announcementForm" class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <input class="border rounded-lg px-3 py-2" name="title" placeholder="Title" required />
+              <input class="border rounded-lg px-3 py-2 lg:col-span-2" name="message" placeholder="Message" required />
+              <button class="bg-slate-900 text-white rounded-lg px-4 py-2 lg:col-span-3">Publish</button>
+            </form>
+          </div>
+          <div class="glass rounded-2xl p-5" id="announcementsList"></div>
+        `;
+
+        const form = container.querySelector("#announcementForm");
+        form.onsubmit = (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(form).entries());
+          state.announcements.unshift({
+            id: id(),
+            title: data.title,
+            message: data.message,
+            date: new Date().toISOString().slice(0, 10),
+          });
+          saveState();
+          form.reset();
+          renderAnnouncements();
+        };
+
+        const list = container.querySelector("#announcementsList");
+        list.innerHTML = state.announcements
+          .map(
+            (announcement) => `
+              <div class="border-b last:border-b-0 py-3">
+                <div class="flex items-center justify-between">
+                  <h4 class="font-semibold">${announcement.title}</h4>
+                  <span class="text-xs text-slate-500">${announcement.date}</span>
+                </div>
+                <p class="text-sm text-slate-700">${announcement.message}</p>
+              </div>
+            `
+          )
+          .join("");
+      };
+
+      const renderReports = () => {
+        const container = document.querySelector("#reports");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Reports</h2>
+              <p class="text-sm text-slate-600">Generate PDFs for collections and expenses.</p>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="glass rounded-2xl p-5">
+              <h3 class="font-semibold">Defaulters List</h3>
+              <p class="text-xs text-slate-500">Per collection period</p>
+              <select id="defaulterCollection" class="border rounded-lg px-3 py-2 mt-3 w-full">
+                ${state.collections.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}
+              </select>
+              <button id="defaulterReport" class="mt-3 bg-slate-900 text-white rounded-lg px-4 py-2 w-full">Generate PDF</button>
+            </div>
+            <div class="glass rounded-2xl p-5">
+              <h3 class="font-semibold">Full Collection Report</h3>
+              <select id="fullCollection" class="border rounded-lg px-3 py-2 mt-3 w-full">
+                ${state.collections.map((c) => `<option value="${c.id}">${c.label}</option>`).join("")}
+              </select>
+              <button id="collectionReport" class="mt-3 bg-slate-900 text-white rounded-lg px-4 py-2 w-full">Generate PDF</button>
+            </div>
+            <div class="glass rounded-2xl p-5">
+              <h3 class="font-semibold">Event Expense Report</h3>
+              <select id="eventReport" class="border rounded-lg px-3 py-2 mt-3 w-full">
+                ${state.events.map((e) => `<option value="${e.id}">${e.name}</option>`).join("")}
+              </select>
+              <button id="eventExpenseReport" class="mt-3 bg-slate-900 text-white rounded-lg px-4 py-2 w-full">Generate PDF</button>
+            </div>
+            <div class="glass rounded-2xl p-5">
+              <h3 class="font-semibold">Annual Summary</h3>
+              <button id="annualReport" class="mt-3 bg-slate-900 text-white rounded-lg px-4 py-2 w-full">Generate PDF</button>
+            </div>
+          </div>
+        `;
+
+        container.querySelector("#defaulterReport").onclick = () => {
+          const collectionId = container.querySelector("#defaulterCollection").value;
+          const collection = state.collections.find((c) => c.id === collectionId);
+          if (!collection) return;
+          const rows = state.members
+            .filter((m) => m.active)
+            .map((member) => {
+              const payment = state.payments.find(
+                (p) => p.collectionId === collectionId && p.memberId === member.id
+              );
+              const status = payment?.status || "Pending";
+              return [member.name, status, formatCurrency(payment?.amount || 0)];
+            })
+            .filter((row) => row[1] !== "Paid");
+          generatePdf(`Defaulters - ${collection.label}`, ["Member", "Status", "Amount"], rows);
+        };
+
+        container.querySelector("#collectionReport").onclick = () => {
+          const collectionId = container.querySelector("#fullCollection").value;
+          const collection = state.collections.find((c) => c.id === collectionId);
+          if (!collection) return;
+          const rows = state.members.map((member) => {
+            const payment = state.payments.find(
+              (p) => p.collectionId === collectionId && p.memberId === member.id
+            );
+            return [member.name, payment?.status || "Pending", formatCurrency(payment?.amount || 0)];
+          });
+          generatePdf(`Collection Report - ${collection.label}`, ["Member", "Status", "Amount"], rows);
+        };
+
+        container.querySelector("#eventExpenseReport").onclick = () => {
+          const eventId = container.querySelector("#eventReport").value;
+          const event = state.events.find((e) => e.id === eventId);
+          if (!event) return;
+          const rows = state.expenses
+            .filter((expense) => expense.eventId === eventId)
+            .map((expense) => [expense.title, expense.date, formatCurrency(expense.amount)]);
+          generatePdf(`Event Expenses - ${event.name}`, ["Expense", "Date", "Amount"], rows);
+        };
+
+        container.querySelector("#annualReport").onclick = () => {
+          const rows = [
+            ["Total Payments", formatCurrency(computeTotals().paymentsTotal)],
+            ["Total Expenses", formatCurrency(computeTotals().expensesTotal)],
+            ["Balance", formatCurrency(computeTotals().balance)],
+          ];
+          generatePdf("Annual Summary", ["Metric", "Value"], rows);
+        };
+      };
+
+      const renderSettings = () => {
+        const container = document.querySelector("#settings");
+        container.innerHTML = `
+          <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+            <div>
+              <h2 class="text-2xl font-semibold">Settings</h2>
+              <p class="text-sm text-slate-600">Export and publish data.</p>
+            </div>
+          </div>
+          <div class="glass rounded-2xl p-5 mb-6">
+            <form id="metaForm" class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <input class="border rounded-lg px-3 py-2" name="batchName" placeholder="Batch name" value="${state.meta.batchName}" />
+              <input class="border rounded-lg px-3 py-2" name="currency" placeholder="Currency (e.g. LKR)" value="${state.meta.currency}" />
+              <button class="bg-slate-900 text-white rounded-lg px-4 py-2">Save Meta</button>
+            </form>
+          </div>
+          <div class="glass rounded-2xl p-5">
+            <h3 class="font-semibold mb-3">Publish to GitHub</h3>
+            <p class="text-xs text-slate-500 mb-4">
+              <!-- Configure your repository and data.json path below. Default path is data.json at repo root. -->
+              Publish the current data.json to your repo using a personal access token.
+            </p>
+            <form id="publishForm" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <input class="border rounded-lg px-3 py-2" name="token" placeholder="GitHub Personal Access Token" required />
+              <input class="border rounded-lg px-3 py-2" name="owner" placeholder="Repo owner" required />
+              <input class="border rounded-lg px-3 py-2" name="repo" placeholder="Repo name" required />
+              <input class="border rounded-lg px-3 py-2" name="branch" placeholder="Branch (main)" value="main" />
+              <input class="border rounded-lg px-3 py-2" name="path" placeholder="Path (data.json)" value="data.json" />
+              <button class="bg-teal-600 text-white rounded-lg px-4 py-2 lg:col-span-2">Publish to GitHub</button>
+            </form>
+            <div id="publishStatus" class="text-sm text-slate-600 mt-3"></div>
+          </div>
+        `;
+
+        container.querySelector("#metaForm").onsubmit = (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(event.target).entries());
+          state.meta.batchName = data.batchName || state.meta.batchName;
+          state.meta.currency = data.currency || state.meta.currency;
+          saveState();
+          renderDashboard();
+        };
+
+        container.querySelector("#publishForm").onsubmit = async (event) => {
+          event.preventDefault();
+          const data = Object.fromEntries(new FormData(event.target).entries());
+          const status = container.querySelector("#publishStatus");
+          status.textContent = "Publishing...";
+          try {
+            const payload = await buildExportPayload();
+            const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2))));
+            const url = `https://api.github.com/repos/${data.owner}/${data.repo}/contents/${data.path}`;
+            const response = await fetch(url, {
+              method: "PUT",
+              headers: {
+                Authorization: `Bearer ${data.token}`,
+                Accept: "application/vnd.github+json",
+              },
+              body: JSON.stringify({
+                message: "Update data.json",
+                content,
+                branch: data.branch || "main",
+              }),
+            });
+            if (!response.ok) {
+              const error = await response.json();
+              throw new Error(error.message || "Publish failed");
+            }
+            status.textContent = "Published successfully.";
+          } catch (error) {
+            status.textContent = `Publish failed: ${error.message}`;
+          }
+        };
+      };
+
+      const buildExportPayload = async () => {
+        const expensesWithPhotos = await Promise.all(
+          state.expenses.map(async (expense) => {
+            const photo = expense.billPhoto || (await db.getBillPhoto(expense.id)) || "";
+            return { ...expense, billPhoto: photo };
+          })
+        );
+        return {
+          meta: state.meta,
+          members: state.members,
+          collections: state.collections,
+          payments: state.payments,
+          events: state.events,
+          expenses: expensesWithPhotos,
+          announcements: state.announcements,
+        };
+      };
+
+      const generatePdf = (title, headers, rows) => {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        doc.setFontSize(14);
+        doc.text(title, 14, 20);
+        doc.autoTable({
+          head: [headers],
+          body: rows,
+          startY: 28,
+        });
+        doc.save(`${title.replace(/\s+/g, "_")}.pdf`);
+      };
+
+      const toBase64 = (file) =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+
+      const renderAll = () => {
+        renderDashboard();
+        renderMembers();
+        renderCollections();
+        renderPayments();
+        renderExpenses();
+        renderEvents();
+        renderReports();
+        renderAnnouncements();
+        renderSettings();
+      };
+
+      const initNavigation = () => {
+        document.querySelectorAll(".nav-item").forEach((btn) => {
+          btn.onclick = () => {
+            const target = btn.dataset.section;
+            document.querySelectorAll(".section").forEach((section) => {
+              section.classList.toggle("hidden", section.id !== target);
+            });
+            document.querySelectorAll(".nav-item").forEach((nav) => nav.classList.remove("bg-slate-800"));
+            btn.classList.add("bg-slate-800");
+          };
+        });
+      };
+
+      const init = async () => {
+        await db.init();
+        loadState();
+        if (!state.meta.batchName) state.meta = defaultMeta;
+        renderAll();
+        initNavigation();
+      };
+
+      init();
+    </script>
+  </body>
+</html>
